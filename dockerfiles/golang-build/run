@@ -1,0 +1,52 @@
+#!/bin/bash
+
+set -eu -o pipefail
+
+
+printlnErr() {
+	# Using printf prevents echo from mangling any unusual filename characters
+	printf "%s\n" "$1" >&2
+}
+
+# Show help if no command is provided
+if [ "$#" -ne "1" ]; then
+	printlnErr "$(basename "$0") invokes a bash command line inside the container.  The container will be started if required."
+	printlnErr "The root of the highest level golang directory structure from the the cwd ($(pwd)) is mounted inside the container as /w/"
+	printlnErr "The gopath for this highest level golang directory structure will be automatically set as a default."
+	printlnErr "Ensure that any other environment variables (including overriding the gopath default) are specified in the command line."
+	printlnErr "The command will be executed from the equivalent position inside the container."
+	printlnErr ""
+	printlnErr "Invocation: $(basename "$0") _command_line_"
+	printlnErr ""
+	exit 1
+fi
+
+# Get the container name from the name of this script (as updated by dockerfiles-build)
+containerName="$(printf "%s" "$(basename "$0")" | sed 's:^run-::')"
+
+# Find the highest directory level golang directory structute
+gopath="$(printf "%s" "$(pwd)/src/" | sed 's:/src/.*::')"
+if [ ! -d "$gopath/src" ]; then
+	printlnErr "'$gopath/src' must exist to be able to use this container"
+	exit 1
+fi
+
+# If the container exists and doesn't have -v "$gopath:/w" then stop and remove it
+priorContainerId="$(docker ps --format "{{.ID}}" --no-trunc --filter "name=$containerName")"
+if [ -n "$priorContainerId" ]; then
+	priorContainerMounts="$(docker ps --format "{{.Mounts}}" --no-trunc --filter "name=$containerName")"
+	if [ "$priorContainerMounts" != "$gopath" ]; then
+		# Container exists and does not have the correct path mounted; ensure it is removed promptly
+		docker rm -f "$priorContainerId" 1>/dev/null
+	fi
+fi
+
+# Ensure the container is running, mounting the gopath as /w/ - requires the github.com/RidiculousRichard/bash-dev-scripts to be on your path
+# git clone https://github.com/RidiculousRichard/bash-dev-scripts.git
+containerId="$(docker-run-image "$(dirname $0)/$containerName"*".save.xz" "$containerName" -d --rm -v "$gopath:/w:z")"
+printlnErr "The host directory $gopath is mounted within the container as /w"
+
+# Exec a command inside the container
+workingDirectory="/w/$(realpath  --relative-to="$gopath" "$(pwd)")"
+docker exec -it "$containerId" /bin/bash -ic "cd \"$workingDirectory\"; export GOPATH=\"/w$gopath\"; $@"
+

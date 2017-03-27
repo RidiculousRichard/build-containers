@@ -1,0 +1,4 @@
+# Ignore all hidden files in the repository root unless they are specifically added
+/.*
+!/.gitignore
+

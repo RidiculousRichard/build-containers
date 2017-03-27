@@ -1,0 +1,11 @@
+#!/bin/sh
+
+set -ex
+
+apk update
+apk add bash
+apk add coreutils
+apk add go
+apk add git
+apk add make
+apk add xz
