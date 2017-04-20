@@ -11,9 +11,10 @@ printlnErr() {
 # Show help if no command is provided
 if [ "$#" -ne "1" ]; then
 	printlnErr "$(basename "$0") invokes a bash command line inside the container.  The container will be started if required."
-	printlnErr "The root of the highest level golang directory structure from the the cwd ($(pwd)) is mounted inside the container as /w/"
-	printlnErr "The gopath for this highest level golang directory structure will be automatically set as a default."
-	printlnErr "Ensure that any other environment variables (including overriding the gopath default) are specified in the command line."
+	printlnErr "A mount point is mounted inside the container as /w/"
+	printlnErr "If available this will be the oldest ancestor gopath, which will be injected into the containers environment variables."
+	printlnErr "If no gopath can be deduced then the mount point will be the current working directory will be used as the mount point"
+	printlnErr "Ensure that any other environment variables (including overriding the injected gopath) are specified in the command line."
 	printlnErr "The command will be executed from the equivalent position inside the container."
 	printlnErr ""
 	printlnErr "Invocation: $(basename "$0") _command_line_"
@@ -25,28 +26,32 @@ fi
 containerName="$(printf "%s" "$(basename "$0")" | sed 's:^run-::')"
 
 # Find the highest directory level golang directory structute
-gopath="$(printf "%s" "$(pwd)/src/" | sed 's:/src/.*::')"
-if [ ! -d "$gopath/src" ]; then
-	printlnErr "'$gopath/src' must exist to be able to use this container"
-	exit 1
+mntpoint="$(printf "%s" "$(pwd)/src/" | sed 's:/src/.*::')"
+injectgopath="yes"
+if [ ! -d "$mntpoint/src" ]; then
+	printlnErr "No gopath found; not automattically setting GOPATH variable"
+	injectgopath=""
 fi
 
-# If the container exists and doesn't have -v "$gopath:/w" then stop and remove it
+# If the container exists and doesn't have -v "$mntpoint:/w" then stop and remove it
 priorContainerId="$(docker ps --format "{{.ID}}" --no-trunc --filter "name=$containerName")"
 if [ -n "$priorContainerId" ]; then
 	priorContainerMounts="$(docker ps --format "{{.Mounts}}" --no-trunc --filter "name=$containerName")"
-	if [ "$priorContainerMounts" != "$gopath" ]; then
+	if [ "$priorContainerMounts" != "$mntpoint" ]; then
 		# Container exists and does not have the correct path mounted; ensure it is removed promptly
 		docker rm -f "$priorContainerId" 1>/dev/null
 	fi
 fi
 
-# Ensure the container is running, mounting the gopath as /w/ - requires the github.com/RidiculousRichard/bash-dev-scripts to be on your path
+# Ensure the container is running, mounting the mntpoint as /w/ - requires the github.com/RidiculousRichard/bash-dev-scripts to be on your path
 # git clone https://github.com/RidiculousRichard/bash-dev-scripts.git
-containerId="$(docker-run-image "$(dirname $0)/$containerName"*".save.xz" "$containerName" -d --rm -v "$gopath:/w:z")"
-printlnErr "The host directory $gopath is mounted within the container as /w"
+containerId="$(docker-run-image "$(dirname $0)/$containerName"*".save.xz" "$containerName" -d --rm -v "$mntpoint:/w:z")"
+printlnErr "The host directory $mntpoint is mounted within the container as /w"
 
 # Exec a command inside the container
-workingDirectory="/w/$(realpath  --relative-to="$gopath" "$(pwd)")"
-docker exec -it "$containerId" /bin/bash -ic "cd \"$workingDirectory\"; export GOPATH=\"/w$gopath\"; $@"
-
+workingDirectory="/w/$(realpath  --relative-to="$mntpoint" "$(pwd)")"
+if [ -n "$injectgopath" ]; then
+	docker exec -it "$containerId" /bin/bash -ic "cd \"$workingDirectory\"; export GOPATH=\"/w$mntpoint\"; $@"
+else
+	docker exec -it "$containerId" /bin/bash -ic "cd \"$workingDirectory\"; $@"
+fi
